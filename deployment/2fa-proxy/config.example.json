@@ -8,9 +8,8 @@
   "piUser": "pi",
   "piPassword": "CHANGE_ME_PI_WEB_PASSWORD",
   "proxyToken": "CHANGE_ME_RANDOM_TOKEN",
-  "fileBrowser": {
-    "host": "127.0.0.1",
-    "port": 22055,
-    "base": "/fb"
-  }
+  "fileBrowser": null,
+  "firstLoginUser": "pi",
+  "firstLoginPassword": "password",
+  "setupComplete": false
 }
