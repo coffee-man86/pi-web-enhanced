@@ -349,7 +349,13 @@ const ACCOUNT_BTN_SCRIPT = `<script>
         btn.href = '/account';
         btn.textContent = '帐号';
         btn.title = '账户设置 · 退出登录';
-        btn.style.cssText = 'display:inline-flex;align-items:center;height:22px;padding:0 8px;margin:0 4px;border-radius:6px;border:1px solid var(--border,rgba(128,128,128,.35));background:var(--bg-panel,rgba(30,41,59,.9));color:var(--accent,#60a5fa);font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;white-space:nowrap';
+        btn.style.cssText = 'display:inline-flex;align-items:center;height:22px;padding:0 8px;margin:0 4px;border-radius:6px;border:1px solid var(--border,rgba(128,128,128,.35));background:var(--bg-panel,rgba(30,41,59,.9));color:var(--accent,#60a5fa);font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;white-space:nowrap;position:relative;z-index:60';
+        // 防父级点击处理器吞掉点击：阻止冒泡 + 强制跳转
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          e.preventDefault();
+          window.location.href = '/account';
+        });
         if (title && title.parentElement) {
           title.parentElement.insertBefore(btn, title.nextSibling);
           done = true;
