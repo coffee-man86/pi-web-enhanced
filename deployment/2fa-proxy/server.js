@@ -178,6 +178,25 @@ h1{font-size:17px;color:#f87171}code{background:#1a1d23;padding:2px 6px;border-r
 </div></body></html>`);
       return;
     }
+    // 对 pi-web 的 HTML 页面注入右下角"账户 · 退出"浮动按钮
+    const ct = String(pr.headers['content-type'] || '');
+    if (!isFb && ct.includes('text/html')) {
+      const chunks = [];
+      pr.on('data', (c) => chunks.push(c));
+      pr.on('end', () => {
+        let html = Buffer.concat(chunks).toString('utf8');
+        if (html.includes('</body>') && !html.includes('piweb2fa-account-btn')) {
+          html = html.replace('</body>', FLOAT_HTML + '</body>');
+          const headers = { ...pr.headers, 'content-length': String(Buffer.byteLength(html)) };
+          res.writeHead(pr.statusCode, headers);
+          res.end(html);
+        } else {
+          res.writeHead(pr.statusCode, pr.headers);
+          res.end(html);
+        }
+      });
+      return;
+    }
     res.writeHead(pr.statusCode, pr.headers);
     pr.pipe(res);
   });
@@ -228,6 +247,7 @@ ${isBootstrap ? '<div class="warn">⚠️ 首次登录后必须完成身份验�
 if (new URLSearchParams(location.search).get('e')) document.getElementById('err').textContent = '${isBootstrap ? '用户名或密码错误' : '密码或验证码错误'}';
 if (new URLSearchParams(location.search).get('b')) document.getElementById('err').textContent = '尝试次数过多，请 60 秒后再试';
 if (new URLSearchParams(location.search).get('c')) document.getElementById('err').textContent = '密码已修改，请用新密码登录';
+if (new URLSearchParams(location.search).get('out')) document.getElementById('err').textContent = '已退出登录';
 </script>
 </body></html>`;
 }
@@ -291,6 +311,26 @@ if (new URLSearchParams(location.search).get('f')) document.getElementById('err'
 </body></html>`;
 }
 
+// 注入到 pi-web 页面的浮动账户按钮（右下角）
+const FLOAT_HTML = `<div id="piweb2fa-account-btn" style="position:fixed;right:16px;bottom:16px;z-index:9999">
+<a href="/account" style="display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:999px;background:rgba(30,41,59,.92);color:#fff;font-size:13px;font-weight:600;text-decoration:none;box-shadow:0 4px 16px rgba(0,0,0,.35);backdrop-filter:blur(4px)">账户 · 退出</a>
+</div>`;
+
+function accountPage() {
+  return `<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>账户</title>${PAGE_CSS}</head><body>
+<div class="card">
+<h1>账户设置</h1>
+<div style="margin:14px 0;padding:12px;border:1px solid #3a3f48;border-radius:8px">
+<div style="font-size:13px;color:#c9ced6">已登录（24 小时内免验证）</div>
+</div>
+<a href="/change-password" style="display:block;text-align:center;padding:11px;border:1px solid #3a3f48;border-radius:6px;color:#3b82f6;text-decoration:none;font-size:14px;margin-top:10px">修改密码</a>
+<form method="post" action="/logout" style="margin-top:10px"><button type="submit" style="background:transparent;color:#f87171;border:1px solid #f87171">退出登录</button></form>
+</div>
+</body></html>`;
+}
+
 // ---------- 主服务 ----------
 const server = http.createServer((req, res) => {
   const ip = clientIp(req);
@@ -316,6 +356,24 @@ const server = http.createServer((req, res) => {
     console.log(`[2fa] SETUP-COMPLETE ip=${ip}`);
     persistSetupComplete(true);
     res.writeHead(302, { Location: '/' });
+    res.end();
+    return;
+  }
+
+  // 账户页与退出登录（先验证 2FA cookie）
+  const piweb2faCookie = parseCookies(req.headers.cookie || '').piweb2fa;
+  const authed = piweb2faCookie && verifyCookie(piweb2faCookie);
+  if (p === '/account') {
+    if (!authed) { res.writeHead(302, { Location: '/login' }); res.end(); return; }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(accountPage());
+    return;
+  }
+  if (p === '/logout' && req.method === 'POST') {
+    res.writeHead(302, {
+      Location: '/login?out=1',
+      'Set-Cookie': 'piweb2fa=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0',
+    });
     res.end();
     return;
   }
