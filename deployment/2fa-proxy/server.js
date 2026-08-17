@@ -329,33 +329,38 @@ const ACCOUNT_BTN_SELECTOR = process.env.ACCOUNT_BTN_SELECTOR
 const ACCOUNT_BTN_SCRIPT = `<script>
 (function () {
   try {
-    function findTitle() {
-      var nodes = document.querySelectorAll('button, a, div, span, h1, h2, h3');
-      for (var i = 0; i < nodes.length; i++) {
-        var el = nodes[i];
-        if (el.children.length === 0 && el.textContent.trim() === 'Pi Web') return el;
+    function findLabel() {
+      var nodes = document.querySelectorAll('button, a, div, span');
+      // 优先找侧边栏的「系统」，其次 完整历史/生成标题/分支/Pi Web
+      for (var pass = 0; pass < 2; pass++) {
+        for (var i = 0; i < nodes.length; i++) {
+          var el = nodes[i];
+          if (el.children.length > 0) continue;
+          var t = el.textContent.trim();
+          if (pass === 0 && t === '系统') return el;
+          if (pass === 1 && (t === '完整历史' || t === '生成标题' || t === '分支' || t === 'Pi Web')) return el;
+        }
       }
       return null;
     }
     function mount() {
       try {
         var btn = document.getElementById('piweb2fa-account-btn');
-        if (btn) return; // 已存在则跳过；被 React 清掉后下次调用会重建
-        var title = findTitle();
+        if (btn) return; // 已存在则跳过；被 React 清掉后下次调用重建
+        var label = findLabel();
         btn = document.createElement('a');
         btn.id = 'piweb2fa-account-btn';
         btn.href = '/account';
         btn.textContent = '帐号';
         btn.title = '账户设置 · 退出登录';
         btn.style.cssText = 'display:inline-flex;align-items:center;height:22px;padding:0 8px;margin:0 4px;border-radius:6px;border:1px solid var(--border,rgba(128,128,128,.35));background:var(--bg-panel,rgba(30,41,59,.9));color:var(--accent,#60a5fa);font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;white-space:nowrap;position:relative;z-index:60';
-        // 防父级点击处理器吞掉点击：阻止冒泡 + 强制跳转
         btn.addEventListener('click', function (e) {
           e.stopPropagation();
           e.preventDefault();
           window.location.href = '/account';
         });
-        if (title && title.parentElement) {
-          title.parentElement.insertBefore(btn, title.nextSibling);
+        if (label && label.parentElement) {
+          label.parentElement.insertBefore(btn, label.nextSibling);
         } else if (document.body) {
           document.body.appendChild(btn);
         }
@@ -370,6 +375,22 @@ const ACCOUNT_BTN_SCRIPT = `<script>
   } catch (e) { /* 绝不破坏页面 */ }
 })();
 </script>`;
+
+function accountPage() {
+  return `<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>账户</title>${PAGE_CSS}</head><body>
+<div class="card">
+<h1>账户设置</h1>
+<div style="margin:14px 0;padding:12px;border:1px solid #3a3f48;border-radius:8px">
+<div style="font-size:13px;color:#c9ced6">已登录（24 小时内免验证）</div>
+</div>
+<a href="/change-password" style="display:block;text-align:center;padding:11px;border:1px solid #3a3f48;border-radius:6px;color:#3b82f6;text-decoration:none;font-size:14px;margin-top:10px">修改密码</a>
+<form method="post" action="/logout" style="margin-top:10px"><button type="submit" style="background:transparent;color:#f87171;border:1px solid #f87171">退出登录</button></form>
+</div>
+</body></html>`;
+}
+
 // ---------- 主服务 ----------
 const server = http.createServer((req, res) => {
   const ip = clientIp(req);
