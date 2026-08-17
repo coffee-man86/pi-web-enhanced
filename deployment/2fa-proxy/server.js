@@ -242,7 +242,7 @@ const server = http.createServer((req, res) => {
 
   if (p === '/qrcode.js') {
     try {
-      res.writeHead(200, { 'Content-Type': 'application/javascript' });
+      res.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-store' });
       fs.createReadStream('/opt/piweb2fa/qrcode.js').pipe(res);
     } catch {
       res.writeHead(404); res.end();
@@ -251,7 +251,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (p === '/setup' && !setupComplete) {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(setupPage(TOTP_SECRET));
     return;
   }
@@ -264,7 +264,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (p === '/login' && req.method === 'GET') {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(loginPage(!setupComplete));
     return;
   }
