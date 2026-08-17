@@ -1,10 +1,14 @@
 # pi-web-enhanced v1.0.0 发行说明
 
-**发布日期**：2026-08-17
-**基础版本**：pi-web 0.8.x（上游 [agegr/pi-web](https://github.com/agegr/pi-web)，MIT）
-**兼容性**：Node.js >= 22.19.0
+> 基于 pi-web 0.8.x（上游 [agegr/pi-web](https://github.com/agegr/pi-web)，MIT），Node >= 22.19
 
 ---
+
+## 为什么用它（适用场景）
+
+- **多设备同步**：有公网端口，希望工作电脑和手机都能访问同一套 pi + web UI，对话进度统一维护，只维护一套环境
+- **文件边界**：在 WSL 中部署，工作区是宿主机某个文件夹的直接映射，确保 AI 只能访问这个工作区
+- **访问控制**：域名白名单 + 双因子认证，公网访问有安全兜底
 
 ## 🚨 登录方式（务必先读）
 
@@ -17,78 +21,56 @@
 
 ---
 
-## 主要更新
+## 基础包（可单独安装，不依赖 2FA）
 
-### ✨ 新增：文件管理操作（直接集成在文件浏览器中）
-原版仅支持浏览/上传/下载，本版新增完整的文件管理：
+针对 pi-web 的一些使用习惯做的改进：
 
-- **新建文件夹**：文件列表顶部"＋ 新建文件夹"按钮
-- **重命名**：悬停文件 → "⋯" 菜单 → 重命名
-- **移动**：悬停 → "⋯" → 移动 → **GUI 目录选择器**（无需手动输入路径）
-- **删除**：悬停 → "⋯" → 删除（带确认框）
-- **目录选择器增强**：选择项目/移动时可直接在弹窗内"＋ 新建文件夹"，创建后自动进入
+### ✨ 文件管理增强
+- 为文件/文件夹加入**重命名 / 移动 / 删除**功能（入口：文件悬停后「@提及」旁的 **⋯** 菜单）
+- 移动使用 **GUI 目录选择器**（无需手动输入路径）
+- 删除带确认框，防止误操作
+- 后端 API 自带安全防护：符号链接逃逸拦截、移动进自身子目录的友好报错
 
-### ✨ 新增：环境变量可配置化（原版需改代码）
-| 变量 | 作用 | 默认值 |
-| --- | --- | --- |
-| `PI_WEB_USERNAME` | Basic Auth 用户名 | `pi` |
-| `PI_WEB_DEFAULT_CWD` | 默认工作目录（新建会话/选择器起始） | `~/pi-cwd-<日期>` |
-| `PI_WEB_TRUST_PROXY_TOKEN` | 可信反代密钥（防 X-Forwarded-For 伪造） | 未设置 |
+### ✨ 目录习惯优化
+- 工作区目录默认选择 `/workspace`（无需每次手动选）
+- 文件目录树和目录选择窗口都增加**「新建文件夹」**按钮（选择器内新建后自动进入）
 
-### 🔒 安全加固
-- **符号链接逃逸防护**：移动/改名时对目标父目录做 realpath 校验，防止符号链接把写入重定向到允许根之外
-- **登录审计日志**：`[piweb-auth] OK/FAIL user=... ip=...`（journald/stdout）
-- **IP 伪造防护**：仅当请求携带与 `PI_WEB_TRUST_PROXY_TOKEN` 匹配的密钥头时信任 X-Forwarded-For
-- **移动进自身子目录**：返回明确错误而非原始 EINVAL
+### 🔒 域名白名单（公网安全基础）
+- 只允许通过配置的域名访问（`PI_WEB_ALLOWED_HOSTS`），阻止 DNS 重绑定攻击
+- 非白名单主机名一律 403
 
-### 🐛 问题修复
-- **大文件上传 multipart 解析失败**（"Failed to parse body as FormData"）：通过 `proxyClientMaxBodySize=5GB` 修复（Next.js 16.3+ 默认仅缓冲 10MB 请求体）
-- **允许根目录重启丢失**：`PI_WEB_DEFAULT_CWD` 直接纳入允许根计算，重启后无需浏览器加载即可操作文件
-- **Edge 登录循环**：`WWW-Authenticate` 移除 `charset="UTF-8"` 参数
-
-### 📦 上传能力
-- 单文件上限：25MB → **1GB**
-- 单次总量：100MB → **2GB**
-
----
-
-## 安装方式
-
-**方式一：应用补丁（推荐，透明可审计）**
-```bash
-git clone https://github.com/agegr/pi-web
-cd pi-web
-git apply pi-web-enhanced.patch
-npm install
-npm run build
-npm start
-```
-
-**方式二：使用本分支源码**
-```bash
-git clone <本仓库地址>
-cd pi-web-enhanced
-npm install
-npm run build
-npm start
-```
+### 📦 其它
+- 上传限制：单文件 1GB、单次 2GB（原版 25MB/100MB）
+- 登录审计日志（journald）
+- 大文件上传 multipart 解析修复、Edge 登录循环修复
 
 ## 配置示例
 
 ```bash
 PORT=25133
 PI_WEB_PASSWORD=你的密码
-PI_WEB_ALLOWED_HOSTS=your.domain.com
-PI_WEB_USERNAME=admin
-PI_WEB_DEFAULT_CWD=/workspace
-PI_WEB_TRUST_PROXY_TOKEN=<随机字符串>   # 前置可信反代时设置
+PI_WEB_ALLOWED_HOSTS=your.domain.com   # 域名白名单
+PI_WEB_USERNAME=admin                  # 可选：改用户名
+PI_WEB_DEFAULT_CWD=/workspace          # 可选：默认工作目录
+PI_WEB_TRUST_PROXY_TOKEN=<随机串>      # 前置 2FA 代理时设置
 ```
 
-## 兼容性与升级
+## 安装
 
-- 无破坏性变更：所有新功能均为增量，环境变量全部可选（不设置则行为与原版一致）
-- 与上游同步：改动集中在 9 个文件（+433/-18 行），`git rebase` 冲突极小
-- 升级 pi-web 时请保留 `next.config.ts` 中的 `proxyClientMaxBodySize` 设置，否则大文件上传会回归
+```bash
+# 方式一：应用补丁（透明可审计）
+git clone https://github.com/agegr/pi-web && cd pi-web
+git apply pi-web-enhanced.patch
+npm install && npm run build && npm start
+
+# 方式二：使用本分支源码
+git clone <本仓库> && cd pi-web-enhanced
+npm install && npm run build && npm start
+```
+
+## 与上游同步
+
+改动集中在 9 个文件（+433/-18），`git rebase` 冲突极小；升级时保留 `next.config.ts` 的 `proxyClientMaxBodySize`。
 
 ## 鸣谢
 
