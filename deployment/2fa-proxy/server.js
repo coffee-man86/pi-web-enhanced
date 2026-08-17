@@ -184,15 +184,23 @@ h1{font-size:17px;color:#f87171}code{background:#1a1d23;padding:2px 6px;border-r
       const chunks = [];
       pr.on('data', (c) => chunks.push(c));
       pr.on('end', () => {
-        let html = Buffer.concat(chunks).toString('utf8');
-        if (html.includes('</body>') && !html.includes('piweb2fa-account-btn')) {
-          html = html.replace('</body>', ACCOUNT_BTN_SCRIPT + '</body>');
-          const headers = { ...pr.headers, 'content-length': String(Buffer.byteLength(html)) };
-          res.writeHead(pr.statusCode, headers);
-          res.end(html);
-        } else {
+        try {
+          let html = Buffer.concat(chunks).toString('utf8');
+          if (html.includes('</body>') && !html.includes('piweb2fa-account-btn')) {
+            html = html.replace('</body>', ACCOUNT_BTN_SCRIPT + '</body>');
+            const headers = { ...pr.headers, 'content-length': String(Buffer.byteLength(html)) };
+            // 注入时删掉 transfer-encoding，避免与 content-length 冲突导致浏览器拒收
+            delete headers['transfer-encoding'];
+            res.writeHead(pr.statusCode, headers);
+            res.end(html);
+            return;
+          }
           res.writeHead(pr.statusCode, pr.headers);
           res.end(html);
+        } catch (injErr) {
+          // 注入失败绝不破坏页面：原样透传
+          res.writeHead(pr.statusCode, pr.headers);
+          res.end(Buffer.concat(chunks));
         }
       });
       return;
@@ -317,39 +325,45 @@ const ACCOUNT_BTN_SELECTOR = process.env.ACCOUNT_BTN_SELECTOR
   || 'body > div:nth-child(3) > div:nth-child(4) > div:nth-child(1) > div';
 const ACCOUNT_BTN_SCRIPT = `<script>
 (function () {
-  var SEL = ${JSON.stringify(ACCOUNT_BTN_SELECTOR)};
-  function mount() {
-    if (document.getElementById('piweb2fa-account-btn')) return;
-    var target = document.querySelector(SEL) || document.body;
-    var btn = document.createElement('a');
-    btn.id = 'piweb2fa-account-btn';
-    btn.href = '/account';
-    btn.title = '账户 · 退出';
-    btn.textContent = '账户 · 退出';
-    btn.style.cssText = 'display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;margin:3px 6px 3px 10px;border-radius:6px;border:1px solid var(--border, rgba(128,128,128,.35));background:var(--bg-panel, rgba(30,41,59,.9));color:var(--accent, #60a5fa);font-size:12px;font-weight:600;text-decoration:none;cursor:pointer;white-space:nowrap';
-    target.appendChild(btn);
-  }
-  function start() { for (var i = 0; i < 30; i++) { (function (n) { setTimeout(mount, 250 * n); })(i); } }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
-  else start();
+  try {
+    var done = false;
+    function findTitle() {
+      var nodes = document.querySelectorAll('button, a, div, span, h1, h2, h3');
+      for (var i = 0; i < nodes.length; i++) {
+        var el = nodes[i];
+        if (el.children.length === 0 && el.textContent.trim() === 'Pi Web') return el;
+      }
+      return null;
+    }
+    function mount() {
+      try {
+        if (done) return;
+        var btn = document.getElementById('piweb2fa-account-btn');
+        if (btn) return;
+        var title = findTitle();
+        btn = document.createElement('a');
+        btn.id = 'piweb2fa-account-btn';
+        btn.href = '/account';
+        btn.textContent = '帐号';
+        btn.title = '账户设置 · 退出登录';
+        btn.style.cssText = 'display:inline-flex;align-items:center;height:22px;padding:0 8px;margin:0 4px;border-radius:6px;border:1px solid var(--border,rgba(128,128,128,.35));background:var(--bg-panel,rgba(30,41,59,.9));color:var(--accent,#60a5fa);font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;white-space:nowrap';
+        if (title && title.parentElement) {
+          title.parentElement.insertBefore(btn, title.nextSibling);
+          done = true;
+        } else if (document.body) {
+          document.body.appendChild(btn);
+        }
+      } catch (e) { /* 静默失败，绝不破坏页面 */ }
+    }
+    function start() { mount(); setTimeout(start, 400); }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+    else start();
+    if (window.MutationObserver) {
+      new MutationObserver(function () { mount(); }).observe(document.body, { childList: true, subtree: true });
+    }
+  } catch (e) { /* 绝不破坏页面 */ }
 })();
 </script>`;
-
-function accountPage() {
-  return `<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>账户</title>${PAGE_CSS}</head><body>
-<div class="card">
-<h1>账户设置</h1>
-<div style="margin:14px 0;padding:12px;border:1px solid #3a3f48;border-radius:8px">
-<div style="font-size:13px;color:#c9ced6">已登录（24 小时内免验证）</div>
-</div>
-<a href="/change-password" style="display:block;text-align:center;padding:11px;border:1px solid #3a3f48;border-radius:6px;color:#3b82f6;text-decoration:none;font-size:14px;margin-top:10px">修改密码</a>
-<form method="post" action="/logout" style="margin-top:10px"><button type="submit" style="background:transparent;color:#f87171;border:1px solid #f87171">退出登录</button></form>
-</div>
-</body></html>`;
-}
-
 // ---------- 主服务 ----------
 const server = http.createServer((req, res) => {
   const ip = clientIp(req);
