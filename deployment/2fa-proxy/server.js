@@ -186,7 +186,7 @@ h1{font-size:17px;color:#f87171}code{background:#1a1d23;padding:2px 6px;border-r
       pr.on('end', () => {
         let html = Buffer.concat(chunks).toString('utf8');
         if (html.includes('</body>') && !html.includes('piweb2fa-account-btn')) {
-          html = html.replace('</body>', FLOAT_HTML + '</body>');
+          html = html.replace('</body>', ACCOUNT_BTN_SCRIPT + '</body>');
           const headers = { ...pr.headers, 'content-length': String(Buffer.byteLength(html)) };
           res.writeHead(pr.statusCode, headers);
           res.end(html);
@@ -311,10 +311,29 @@ if (new URLSearchParams(location.search).get('f')) document.getElementById('err'
 </body></html>`;
 }
 
-// 注入到 pi-web 页面的浮动账户按钮（右下角）
-const FLOAT_HTML = `<div id="piweb2fa-account-btn" style="position:fixed;right:16px;bottom:16px;z-index:9999">
-<a href="/account" style="display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:999px;background:rgba(30,41,59,.92);color:#fff;font-size:13px;font-weight:600;text-decoration:none;box-shadow:0 4px 16px rgba(0,0,0,.35);backdrop-filter:blur(4px)">账户 · 退出</a>
-</div>`;
+// 注入到 pi-web 页面的账户按钮（JS 注入：等待 React 渲染完成后挂到目标容器）
+// 目标容器可用 ACCOUNT_BTN_SELECTOR 环境变量覆盖；找不到时回退到右下角浮动。
+const ACCOUNT_BTN_SELECTOR = process.env.ACCOUNT_BTN_SELECTOR
+  || 'body > div:nth-child(3) > div:nth-child(4) > div:nth-child(1) > div';
+const ACCOUNT_BTN_SCRIPT = `<script>
+(function () {
+  var SEL = ${JSON.stringify(ACCOUNT_BTN_SELECTOR)};
+  function mount() {
+    if (document.getElementById('piweb2fa-account-btn')) return;
+    var target = document.querySelector(SEL) || document.body;
+    var btn = document.createElement('a');
+    btn.id = 'piweb2fa-account-btn';
+    btn.href = '/account';
+    btn.title = '账户 · 退出';
+    btn.textContent = '账户 · 退出';
+    btn.style.cssText = 'display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;margin:3px 6px 3px 10px;border-radius:6px;border:1px solid var(--border, rgba(128,128,128,.35));background:var(--bg-panel, rgba(30,41,59,.9));color:var(--accent, #60a5fa);font-size:12px;font-weight:600;text-decoration:none;cursor:pointer;white-space:nowrap';
+    target.appendChild(btn);
+  }
+  function start() { for (var i = 0; i < 30; i++) { (function (n) { setTimeout(mount, 250 * n); })(i); } }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
+})();
+</script>`;
 
 function accountPage() {
   return `<!DOCTYPE html>
