@@ -18,11 +18,15 @@ Basic Auth 只有密码：无法防暴力破解、无失败锁定、无登录记
 
 ### 功能
 - **双因子登录**：密码 + TOTP 动态码（标准 RFC 6238，兼容 Google Authenticator / Microsoft Authenticator / 微信身份验证器）
+- **首次登录引导**：全新安装自动进入引导模式——首次用 `pi` + 默认密码登录 → 强制绑定页（本机专属二维码，每次安装随机生成不共享）→ 点「我已经绑定」→ 切换为正常 2FA
+- **统一密码模型**：引导登录与正常登录同一个密码，绑定后不变；登录页可随时「修改密码」（未绑定阶段无需动态码，绑定后需当前密码 + 动态码）
+- **账户页 + 退出登录**：pi-web 页面自动注入「帐号」按钮（放在侧边栏「系统」项后），点进账户页可修改密码/退出登录
 - **登录限速**：同 IP 60 秒内 5 次失败 → 锁定 60 秒
 - **登录审计日志**：`[2fa] OK/FAIL ip=...`（journald）
-- **24h 签名 cookie**：登录后免重复验证（HttpOnly + SameSite=Lax）
+- **24h 签名 cookie**：HttpOnly + SameSite=Lax，可退出清除
 - **透明转发**：向 pi-web 注入 Basic Auth，用户免二次登录
 - **可信代理密钥头**：`X-Piweb-Proxy-Token`，配合 pi-web 的 `PI_WEB_TRUST_PROXY_TOKEN` 防 IP 伪造
+- **上游兼容修复**：转发时重写 `Origin`（防 403 Untrusted API）、剥离 `accept-encoding`（防 gzip 字节损坏导致页面刷不出来）、上游 401 时给出配置指引页
 - **可选 /fb 路由**：配置 `fileBrowser` 字段后，`/fb` 前缀转发到文件管理器（如 FileBrowser）
 
 ### 安装（3 步）
