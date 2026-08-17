@@ -26,12 +26,12 @@ const CONFIG_PATH = '/etc/piweb2fa/config.json';
 const CFG = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 const PORT = CFG.port;
 const UPSTREAM = CFG.upstream; // {host, port}
-const PASSWORD = CFG.password; // 正常模式登录密码
+let PASSWORD = CFG.password; // 登录密码（引导与正常模式同一个；可修改）
 const COOKIE_SECRET = Buffer.from(CFG.cookieSecret, 'hex');
 const TOTP_SECRET = CFG.totpSecret; // base32
 const COOKIE_MAX_AGE = CFG.cookieMaxAge || 86400;
 const FIRST_LOGIN_USER = CFG.firstLoginUser || 'pi';
-const FIRST_LOGIN_PASSWORD = CFG.firstLoginPassword || 'password';
+// 密码统一使用 PASSWORD：引导登录（+用户名）与正常登录（+动态码）同一个密码
 const PI_BASIC = 'Basic ' + Buffer.from(CFG.piUser + ':' + CFG.piPassword).toString('base64');
 const FB = CFG.fileBrowser || null;
 
@@ -46,6 +46,17 @@ function persistSetupComplete(value) {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(d, null, 2), { mode: 0o600 });
   } catch (e) {
     console.error('[2fa] 无法持久化 setupComplete:', e.message);
+  }
+}
+
+function persistPassword(value) {
+  PASSWORD = value;
+  try {
+    const d = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    d.password = value;
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(d, null, 2), { mode: 0o600 });
+  } catch (e) {
+    console.error('[2fa] 无法持久化密码:', e.message);
   }
 }
 
@@ -147,6 +158,23 @@ function proxy(req, res, upstream, isFb) {
     path: req.url,
     headers,
   }, (pr) => {
+    // pi-web 上游返回 401：说明透明转发的 Basic Auth 凭据配置有误，
+    // 给明确指引，避免浏览器弹出难以理解的 Basic Auth 对话框。
+    if (!isFb && pr.statusCode === 401) {
+      pr.resume();
+      res.writeHead(502, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>配置错误</title>
+<style>body{font-family:system-ui,sans-serif;background:#1a1d23;color:#e6e8eb;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0}
+.card{background:#242830;padding:28px;border-radius:12px;max-width:460px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+h1{font-size:17px;color:#f87171}code{background:#1a1d23;padding:2px 6px;border-radius:4px;font-size:12px}</style></head><body>
+<div class="card"><h1>上游服务认证失败（401）</h1>
+<p style="font-size:13px;line-height:1.7">2FA 代理向 pi-web 透明转发时被拒绝，通常是因为
+<code>/etc/piweb2fa/config.json</code> 中的 <code>piUser</code> / <code>piPassword</code>
+与 pi-web 实际的 Basic Auth 凭据不一致。</p>
+<p style="font-size:13px;line-height:1.7">请修正后执行：<code>systemctl restart piweb2fa</code></p>
+</div></body></html>`);
+      return;
+    }
     res.writeHead(pr.statusCode, pr.headers);
     pr.pipe(res);
   });
@@ -191,10 +219,12 @@ ${fields}
 </form>
 <div class="err" id="err"></div>
 ${isBootstrap ? '<div class="warn">⚠️ 首次登录后必须完成身份验证器绑定，否则仅凭此账号密码即可访问，请立即绑定。</div>' : '<div class="hint">登录后 24 小时内免验证</div>'}
+<div style="text-align:center;margin-top:14px"><a href="/change-password" style="color:#9aa0a8;font-size:12px;text-decoration:none">修改密码</a></div>
 </div>
 <script>
 if (new URLSearchParams(location.search).get('e')) document.getElementById('err').textContent = '${isBootstrap ? '用户名或密码错误' : '密码或验证码错误'}';
 if (new URLSearchParams(location.search).get('b')) document.getElementById('err').textContent = '尝试次数过多，请 60 秒后再试';
+if (new URLSearchParams(location.search).get('c')) document.getElementById('err').textContent = '密码已修改，请用新密码登录';
 </script>
 </body></html>`;
 }
@@ -234,6 +264,30 @@ document.getElementById('done').onclick = function () {
 </body></html>`;
 }
 
+function changePasswordPage(isBootstrap) {
+  return `<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>修改密码</title>${PAGE_CSS}</head><body>
+<div class="card">
+<h1>修改密码</h1>
+<form method="post" action="/change-password" autocomplete="off">
+<label>当前密码</label><input type="password" name="current" required autofocus autocomplete="current-password">
+${isBootstrap ? '' : '<label>动态验证码（身份验证器）</label><input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required>'}
+<label>新密码（至少 6 位）</label><input type="password" name="new1" required autocomplete="new-password">
+<label>确认新密码</label><input type="password" name="new2" required autocomplete="new-password">
+<button type="submit">确认修改</button>
+</form>
+<div class="err" id="err"></div>
+<div class="hint">${isBootstrap ? '首次登录阶段无需动态码即可修改密码' : '修改密码需验证当前密码 + 动态码'}</div>
+<div style="text-align:center;margin-top:14px"><a href="/login" style="color:#9aa0a8;font-size:12px;text-decoration:none">返回登录</a></div>
+</div>
+<script>
+if (new URLSearchParams(location.search).get('e')) document.getElementById('err').textContent = '两次输入的新密码不一致或长度不足';
+if (new URLSearchParams(location.search).get('f')) document.getElementById('err').textContent = '当前密码${isBootstrap ? '' : '或动态码'}不正确';
+</script>
+</body></html>`;
+}
+
 // ---------- 主服务 ----------
 const server = http.createServer((req, res) => {
   const ip = clientIp(req);
@@ -263,6 +317,39 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (p === '/change-password' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(changePasswordPage(!setupComplete));
+    return;
+  }
+  if (p === '/change-password' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (d) => { body += d; if (body.length > 8192) req.destroy(); });
+    req.on('end', () => {
+      const params = new URLSearchParams(body);
+      const cur = params.get('current') || '';
+      const code = params.get('code') || '';
+      const n1 = params.get('new1') || '';
+      const n2 = params.get('new2') || '';
+      if (n1 !== n2 || n1.length < 6) {
+        res.writeHead(302, { Location: '/change-password?e=1' });
+        res.end();
+        return;
+      }
+      const curOk = timingSafeEqualStr(cur, PASSWORD) && (setupComplete ? totpValid(TOTP_SECRET, code) : true);
+      if (!curOk) {
+        res.writeHead(302, { Location: '/change-password?f=1' });
+        res.end();
+        return;
+      }
+      console.log(`[2fa] PASSWORD-CHANGED ip=${ip}`);
+      persistPassword(n1);
+      res.writeHead(302, { Location: '/login?c=1' });
+      res.end();
+    });
+    return;
+  }
+
   if (p === '/login' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(loginPage(!setupComplete));
@@ -275,10 +362,10 @@ const server = http.createServer((req, res) => {
       const params = new URLSearchParams(body);
       let ok = false;
       if (!setupComplete) {
-        // 首次登录：用户名 + 密码（默认 pi / password）
+        // 首次登录：用户名 + 密码（默认 pi / password，与正常登录同一密码）
         const user = params.get('username') || '';
         const pass = params.get('password') || '';
-        ok = timingSafeEqualStr(user, FIRST_LOGIN_USER) && timingSafeEqualStr(pass, FIRST_LOGIN_PASSWORD);
+        ok = timingSafeEqualStr(user, FIRST_LOGIN_USER) && timingSafeEqualStr(pass, PASSWORD);
       } else {
         const pass = params.get('password') || '';
         const code = params.get('code') || '';
