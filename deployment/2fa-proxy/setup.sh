@@ -1,11 +1,11 @@
 #!/bin/bash
 # 一键安装 PiWeb 2FA 代理（在运行 pi-web 的 Linux 主机上执行，需要 root）
 # 用法：sudo bash setup.sh [端口] [上游端口]
-# 示例：sudo bash setup.sh 22052 30042
+# 示例：sudo bash setup.sh 42204 25133
 set -e
 
-PORT="${1:-22052}"
-UPSTREAM_PORT="${2:-30042}"
+PORT="${1:-42204}"
+UPSTREAM_PORT="${2:-25133}"
 CONF_DIR=/etc/piweb2fa
 APP_DIR=/opt/piweb2fa
 

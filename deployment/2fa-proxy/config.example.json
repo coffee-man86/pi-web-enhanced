@@ -1,6 +1,6 @@
 {
-  "port": 22052,
-  "upstream": { "host": "127.0.0.1", "port": 30042 },
+  "port": 42204,
+  "upstream": { "host": "127.0.0.1", "port": 25133 },
   "password": "CHANGE_ME_STRONG_PASSWORD",
   "cookieSecret": "CHANGE_ME_64_HEX_CHARS",
   "totpSecret": "CHANGE_ME_BASE32",

@@ -23,15 +23,15 @@ pi-web 的 Basic Auth 只有密码，公网暴露时无法防暴力破解、也�
 
 ### 架构
 ```
-公网用户 → 2FA 代理(:22052) → 登录页(密码+动态码) → 24h cookie → 透明代理
-                                    ├→ pi-web(:30042)（注入 Basic Auth，用户免二次登录）
+公网用户 → 2FA 代理(:42204) → 登录页(密码+动态码) → 24h cookie → 透明代理
+                                    ├→ pi-web(:25133)（注入 Basic Auth，用户免二次登录）
                                     └→（可选）文件管理器 /fb（如 FileBrowser）
 ```
 
 ### 安装（在运行 pi-web 的 Linux 主机上）
 ```bash
 # 需要 Node.js >= 18（无任何第三方依赖）
-sudo bash setup.sh 22052 30042
+sudo bash setup.sh 42204 25133
 ```
 脚本会生成随机 TOTP 密钥 / cookie 密钥 / 代理令牌，写入 `/etc/piweb2fa/config.json`。
 
