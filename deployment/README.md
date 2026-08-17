@@ -16,7 +16,7 @@ deployment/
 
 ### 解决的问题
 pi-web 的 Basic Auth 只有密码，公网暴露时无法防暴力破解、也没有登录失败锁定。
-本代理在 pi-web 前增加「密码 + TOTP 动态码」，并内置：
+本代理在 pi-web 前增加「密码 + TOTP 动态码」（**登录无需用户名**，代理自动注入 pi-web 凭据），并内置：
 - 登录限速（同 IP 60 秒 5 次失败 → 锁 60 秒）
 - 登录审计日志（`[2fa] OK/FAIL ip=...`，journald）
 - 可信代理密钥头（配合 pi-web 的 `PI_WEB_TRUST_PROXY_TOKEN`，防 X-Forwarded-For 伪造）
