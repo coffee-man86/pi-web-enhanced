@@ -130,6 +130,12 @@ function timingSafeEqualStr(a, b) {
 const fails = new Map();
 function throttle(ip) {
   const now = Date.now();
+  // 防止 Map 无限增长：超过 10000 个条目时清理已过期记录
+  if (fails.size > 10000) {
+    for (const [k, v] of fails) {
+      if (v.until <= now && now - v.first > 120000) fails.delete(k);
+    }
+  }
   let rec = fails.get(ip);
   if (!rec) { rec = { count: 0, first: now, until: 0 }; fails.set(ip, rec); }
   if (rec.until > now) return true;
@@ -322,10 +328,7 @@ if (new URLSearchParams(location.search).get('f')) document.getElementById('err'
 </body></html>`;
 }
 
-// 注入到 pi-web 页面的账户按钮（JS 注入：等待 React 渲染完成后挂到目标容器）
-// 目标容器可用 ACCOUNT_BTN_SELECTOR 环境变量覆盖；找不到时回退到右下角浮动。
-const ACCOUNT_BTN_SELECTOR = process.env.ACCOUNT_BTN_SELECTOR
-  || 'body > div:nth-child(3) > div:nth-child(4) > div:nth-child(1) > div';
+// 注入到 pi-web 页面的账户按钮（JS 注入：等待 React 渲染完成后挂到「系统」侧边栏项后面）
 const ACCOUNT_BTN_SCRIPT = `<script>
 (function () {
   try {
@@ -366,9 +369,11 @@ const ACCOUNT_BTN_SCRIPT = `<script>
         }
       } catch (e) { /* 静默失败，绝不破坏页面 */ }
     }
-    function start() { mount(); setTimeout(start, 400); }
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
-    else start();
+    var tries = 0;
+    function retry() { if (tries++ < 15) { mount(); setTimeout(retry, 400); } }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', retry);
+    else retry();
+    // React 重渲染导致按钮被清掉时，由观察器补挂（高频且高效）
     if (window.MutationObserver) {
       new MutationObserver(function () { mount(); }).observe(document.body, { childList: true, subtree: true });
     }
@@ -398,12 +403,15 @@ const server = http.createServer((req, res) => {
   const p = url.pathname;
 
   if (p === '/qrcode.js') {
-    try {
+    const qrStream = fs.createReadStream('/opt/piweb2fa/qrcode.js');
+    qrStream.on('error', () => {
+      if (!res.headersSent) res.writeHead(404);
+      res.end();
+    });
+    qrStream.on('open', () => {
       res.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-store' });
-      fs.createReadStream('/opt/piweb2fa/qrcode.js').pipe(res);
-    } catch {
-      res.writeHead(404); res.end();
-    }
+      qrStream.pipe(res);
+    });
     return;
   }
 
