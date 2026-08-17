@@ -329,7 +329,6 @@ const ACCOUNT_BTN_SELECTOR = process.env.ACCOUNT_BTN_SELECTOR
 const ACCOUNT_BTN_SCRIPT = `<script>
 (function () {
   try {
-    var done = false;
     function findTitle() {
       var nodes = document.querySelectorAll('button, a, div, span, h1, h2, h3');
       for (var i = 0; i < nodes.length; i++) {
@@ -340,9 +339,8 @@ const ACCOUNT_BTN_SCRIPT = `<script>
     }
     function mount() {
       try {
-        if (done) return;
         var btn = document.getElementById('piweb2fa-account-btn');
-        if (btn) return;
+        if (btn) return; // 已存在则跳过；被 React 清掉后下次调用会重建
         var title = findTitle();
         btn = document.createElement('a');
         btn.id = 'piweb2fa-account-btn';
@@ -358,7 +356,6 @@ const ACCOUNT_BTN_SCRIPT = `<script>
         });
         if (title && title.parentElement) {
           title.parentElement.insertBefore(btn, title.nextSibling);
-          done = true;
         } else if (document.body) {
           document.body.appendChild(btn);
         }
