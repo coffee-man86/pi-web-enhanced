@@ -147,6 +147,9 @@ function proxy(req, res, upstream, isFb) {
   const headers = { ...req.headers };
   if (!isFb) delete headers.cookie;
   delete headers.host;
+  // 关键：剥掉 accept-encoding，要求上游返回未压缩内容。
+  // 否则 gzip 字节被按 utf8 转码再回传会损坏，浏览器解压失败（页面刷不出来）。
+  delete headers['accept-encoding'];
   headers.host = upstream.host + ':' + upstream.port;
   // 关键：把 Origin 重写为与上游一致（否则 pi-web 的 CSRF 同源校验会把
   // 浏览器请求判为跨站 → 403 "Untrusted API request"）
@@ -196,7 +199,7 @@ h1{font-size:17px;color:#f87171}code{background:#1a1d23;padding:2px 6px;border-r
             return;
           }
           res.writeHead(pr.statusCode, pr.headers);
-          res.end(html);
+          res.end(Buffer.concat(chunks)); // 原始字节透传，绝不转码
         } catch (injErr) {
           // 注入失败绝不破坏页面：原样透传
           res.writeHead(pr.statusCode, pr.headers);
