@@ -1,0 +1,5 @@
+# 写入 WSL 发行版内的 /etc/fstab
+# 只挂载你需要的工作目录（其余宿主机磁盘一律不可见）
+# 格式：Windows路径 挂载点 drvfs 选项 0 0
+# 把 F:\你的工作目录 换成你的实际路径（反斜杠保留）
+F:\你的工作目录 /workspace drvfs defaults,uid=1000,gid=1000,umask=022 0 0

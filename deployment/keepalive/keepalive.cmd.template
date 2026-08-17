@@ -1,0 +1,15 @@
+@echo off
+REM ============================================================
+REM  WSL 保活循环（通用模板）
+REM  把下面的 DISTRO_NAME 改成你的 WSL 发行版名称（如 Ubuntu-24.04）
+REM  需要先在发行版内创建 /usr/local/bin/piweb-keepalive.sh：
+REM    sudo tee /usr/local/bin/piweb-keepalive.sh <<'EOF'
+REM    #!/bin/bash
+REM    while true; do sleep 60; done
+REM    EOF
+REM    sudo chmod +x /usr/local/bin/piweb-keepalive.sh
+REM ============================================================
+:loop
+C:\Windows\System32\wsl.exe -d DISTRO_NAME -u pi -e /usr/local/bin/piweb-keepalive.sh
+timeout /t 5 /nobreak >nul
+goto loop

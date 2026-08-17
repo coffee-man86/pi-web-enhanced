@@ -1,0 +1,2 @@
+' 放到 Windows 启动文件夹（Win+R: shell:startup），登录时隐藏启动 keepalive.cmd
+CreateObject("WScript.Shell").Run "cmd.exe /c C:\path\to\keepalive.cmd", 0, False

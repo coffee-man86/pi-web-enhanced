@@ -1,0 +1,21 @@
+# 写入 WSL 发行版内的 /etc/wsl.conf（覆盖原文件前先备份）
+# 作用：
+#   1) [automount] enabled=false —— 禁止 WSL 把宿主机全部磁盘自动挂载到 /mnt/*
+#      （默认会把 C/D/E/F 整块盘暴露给每个发行版，是常见的越权访问来源）
+#   2) [interop]  enabled=false —— 禁止在 Linux 内执行 Windows 程序
+#      （默认可用 cmd.exe/powershell 直接读宿主机 C 盘）
+#   3) mountFsTab=true —— 允许 /etc/fstab 精确挂载你指定的目录（见 fstab.example）
+# 注意：修改后需 wsl --shutdown 重启所有发行版生效。
+
+[boot]
+systemd=true
+
+[user]
+default=你的用户名
+
+[automount]
+enabled = false
+mountFsTab = true
+
+[interop]
+enabled = false
