@@ -1,156 +1,76 @@
-# Pi Web
+# pi-web-enhanced
 
-[中文文档](./README.zh-CN.md) | [日本語](./README.ja.md) | [Русский](./README.ru.md)
+[pi-web](https://github.com/agegr/pi-web) 的增强分支：在保持原版功能的基础上，增加**文件管理操作**与**可配置化改进**。
 
-Local browser UI for the [pi coding agent](https://github.com/earendil-works/pi). Pi Web uses the same local configuration and session files as pi, so you can browse and resume conversations, run agent turns, configure models and resources, and inspect project files from a browser.
+## 特性
 
-![Pi Web displaying a pi session with structured Markdown, tool calls, and project navigation](https://raw.githubusercontent.com/agegr/pi-web/main/docs/screenshot2.png)
+### 文件/文件夹操作（直接集成在文件浏览器中）
+- **新建文件夹**：文件列表顶部按钮；目录选择器内也可直接新建
+- **重命名**：悬停文件 → "⋯" → 重命名
+- **移动**：悬停 → "⋯" → 移动 → GUI 目录选择器（无需手输路径）
+- **删除**：悬停 → "⋯" → 删除（带确认）
+- 后端 API：`DELETE`（删除）、`PATCH`（rename/move）、`POST ?type=mkdir`（新建文件夹）
+- 安全性：所有操作沿用原版的 Host/CSRF 校验 + 允许根目录检查，并补充了
+  - 符号链接逃逸防护（目标父目录 realpath 校验，防止写入被重定向到根目录外）
+  - 移动进自身子目录的友好错误
+- 上传限制：单文件 1GB、单次 2GB（原版 25MB/100MB）
 
-## Features
-
-- **Session workspace**: browse, resume, rename, export, and delete conversations grouped by project, with running state, context usage, cost, and compaction details.
-- **Two ways to branch**: **New session** creates an independent session file from an earlier message; **Edit from here** creates a branch inside the current session.
-- **Project file tools**: browse and upload files, inspect Git diffs, and preview source, Markdown, images, audio, PDFs, and DOCX files with automatic refresh.
-- **Git worktrees**: switch checkouts from the sidebar while keeping sessions from the same repository grouped together.
-- **Web-based configuration**: manage provider login and API keys, models, model tests, plugin packages, and skills without leaving Pi Web.
-- **English and Simplified Chinese UI**: Pi Web follows the browser language initially and provides a language switcher in the top bar.
-
-## Quick Start
-
-Pi Web requires Node.js 22.19.0 or newer. Check your version with `node --version`, then run:
-
-```bash
-npx @agegr/pi-web@latest
-```
-
-The CLI opens a browser after the server is ready. If it does not, open [http://127.0.0.1:30141](http://127.0.0.1:30141). Pi Web listens only on `127.0.0.1` by default.
-
-If no model provider is configured yet, open the **Models** panel to sign in or add an API key.
-
-To install the `pi-web` command globally:
-
-```bash
-npm install -g @agegr/pi-web@latest
-pi-web
-```
-
-To update, stop the running process with `Ctrl+C` and run the same install command again. To uninstall, run `npm uninstall -g @agegr/pi-web`.
-
-## Configuration
-
-For port and hostname, command-line options override the corresponding environment variables. Either `--no-open` or `PI_WEB_NO_OPEN=1` disables automatic browser opening.
-
-| Option or environment variable | Purpose | Default |
+### 可配置化（通过环境变量，无需改代码）
+| 变量 | 作用 | 默认 |
 | --- | --- | --- |
-| `--port <port>`, `-p <port>`, or `PORT` | Server port | `30141` |
-| `--hostname <host>`, `-H <host>`, or `PI_WEB_HOSTNAME` | Bind hostname | `127.0.0.1` |
-| `--no-open` or `PI_WEB_NO_OPEN=1` | Do not open a browser automatically | Browser opens |
-| `PI_WEB_ALLOWED_HOSTS` | Additional exact proxy or custom hostnames, comma-separated | Unset |
-| `PI_WEB_PASSWORD` | Enable HTTP Basic Auth; the username is always `pi` | Authentication disabled |
+| `PI_WEB_USERNAME` | Basic Auth 用户名（原版写死 `pi`） | `pi` |
+| `PI_WEB_DEFAULT_CWD` | 默认工作目录（新建会话/目录选择器起始位置） | `~/pi-cwd-<日期>` |
+| `PI_WEB_TRUST_PROXY_TOKEN` | 可信反代密钥：仅当请求携带匹配的密钥头时才信任 `X-Forwarded-For`（防伪造 IP 污染日志） | 未设置 |
 
-For example:
+### 其他
+- 登录审计日志：`[piweb-auth] OK/FAIL user=... ip=...`（写 journald / stdout）
+- `WWW-Authenticate` 去掉 `charset="UTF-8"`（Edge 兼容）
+- `proxyClientMaxBodySize=5GB`（修复大文件上传的 multipart 解析失败）
 
+## 安装
+
+### 方式一：直接应用补丁（推荐）
 ```bash
-pi-web -p 8080 -H 0.0.0.0 --no-open
-```
-
-### Remote Access
-
-Binding to a non-loopback address exposes an agent that can execute high-privilege actions. On a trusted LAN, require a long random password:
-
-```bash
-PI_WEB_PASSWORD='a-long-random-password' pi-web --hostname 0.0.0.0
-```
-
-Basic Auth does not encrypt the password in transit. Do not expose Pi Web over plain HTTP to the internet; use HTTPS through a trusted reverse proxy or a trusted VPN. If a reverse proxy sends an external hostname, add that exact name to `PI_WEB_ALLOWED_HOSTS`. This allow-list does not change the address Pi Web binds to.
-
-### HTTP Proxy
-
-Server-side model and API requests honor the standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables.
-
-On macOS or Linux:
-
-```bash
-HTTP_PROXY=http://127.0.0.1:7890 \
-HTTPS_PROXY=http://127.0.0.1:7890 \
-NO_PROXY=localhost,127.0.0.1 \
-npx @agegr/pi-web@latest
-```
-
-On Windows PowerShell:
-
-```powershell
-$env:HTTP_PROXY = "http://127.0.0.1:7890"
-$env:HTTPS_PROXY = "http://127.0.0.1:7890"
-$env:NO_PROXY = "localhost,127.0.0.1"
-npx @agegr/pi-web@latest
-```
-
-## Notes
-
-- **Agent data**: Pi Web reads pi data from `~/.pi/agent` by default, including session files under `sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`. Set `PI_CODING_AGENT_DIR` to use another pi agent directory.
-- **Filesystem access**: Pi Web must be able to read the agent data directory and the working directories recorded by its sessions. Run Pi Web in the same filesystem environment as pi when sharing existing sessions.
-- **Shared configuration**: the Models panel uses pi's model, settings, and credential storage, so changes are visible to both interfaces.
-- **File access boundary**: the file browser is limited to working directories selected in Pi Web and project or session roots it already knows about; it is not a general filesystem browser.
-- **Git worktrees**: see [Worktrees in Pi Web](./docs/worktrees.md) for switcher visibility, worktree creation, and removal behavior.
-
-### Downstream Session Context Menu
-
-Electron wrappers and other downstream integrations can provide a session-row
-context menu without patching `SessionSidebar`. Listen for the cancelable
-`pi-web:session-row-contextmenu` browser event and call `preventDefault()`
-synchronously when the integration will handle it:
-
-```js
-window.addEventListener("pi-web:session-row-contextmenu", (event) => {
-  event.preventDefault();
-  const { id, path, cwd, name, clientX, clientY, refresh } = event.detail;
-
-  void openSessionMenu({ id, path, cwd, name, clientX, clientY }).then((changed) => {
-    if (changed) refresh();
-  });
-});
-```
-
-The detail object contains `id`, `path`, `cwd`, optional `name`, pointer
-coordinates, and a `refresh()` callback for actions that change the session
-list. If no listener cancels the extension event, Pi Web preserves the
-browser's native context menu. This hook is browser-side and independent of
-Pi agent extensions.
-
-## Development
-
-```bash
+git clone https://github.com/agegr/pi-web
+cd pi-web
+git apply /path/to/pi-web-enhanced.patch
 npm install
-npm run dev
+npm run build
+npm start   # 或 npx next start -H 0.0.0.0 -p 30141
 ```
 
-The development server runs at [http://127.0.0.1:30141](http://127.0.0.1:30141). Run the common checks with:
+### 方式二：使用本分支源码
+```bash
+git clone <本仓库地址>
+cd pi-web-enhanced
+npm install
+npm run build
+npm start
+```
+
+## 配置示例
 
 ```bash
-npm test
-node_modules/.bin/tsc --noEmit
-npm run lint
+# /etc/pi-web/env 或 systemd EnvironmentFile / 命令行环境
+PORT=30141
+PI_WEB_PASSWORD=你的密码
+PI_WEB_ALLOWED_HOSTS=your.domain.com
+PI_WEB_USERNAME=admin
+PI_WEB_DEFAULT_CWD=/workspace
+# 如果前置了可信反代（如 2FA 代理），设置共享密钥：
+PI_WEB_TRUST_PROXY_TOKEN=<随机字符串>
 ```
 
-Do not run `next build` or `npm run build` during normal development. It writes to `.next/` and can interfere with the development server; leave builds for release work.
+## 安全说明
 
-Contributor guides: [Internationalization](./docs/i18n.md) and [Release process](./docs/release.md).
+- 本分支不包含任何个人配置/凭据，所有个性化内容通过环境变量注入
+- 建议公网部署时前置 HTTPS 反代 + 强密码 + 登录限速（参考原版安全文档）
+- 移动/删除/新建文件夹 API 均限定在允许根目录内
 
-## Repository Layout
+## 与上游同步
 
-```text
-app/             Next.js UI and API routes
-components/      React UI components
-hooks/           Client state and interaction hooks
-lib/             Session, agent, model, file, Git, and security logic
-public/          Static assets and PWA files
-bin/             npm CLI entrypoint and launch option parsing
-docs/            Focused user and contributor guides
-```
-
-See [AGENTS.md](./AGENTS.md) for the architecture notes and detailed file map.
+本分支基于 pi-web 0.8.x。上游更新后，可用 `git fetch upstream && git rebase` 合并；改动集中在上述 9 个文件，冲突通常很小。
 
 ## License
 
-[MIT](./LICENSE)
+MIT（保留上游 [agegr/pi-web](https://github.com/agegr/pi-web) 版权声明）
