@@ -148,6 +148,9 @@ function proxy(req, res, upstream, isFb) {
   if (!isFb) delete headers.cookie;
   delete headers.host;
   headers.host = upstream.host + ':' + upstream.port;
+  // 关键：把 Origin 重写为与上游一致（否则 pi-web 的 CSRF 同源校验会把
+  // 浏览器请求判为跨站 → 403 "Untrusted API request"）
+  if (!isFb) headers.origin = `http://${upstream.host}:${upstream.port}`;
   if (!isFb) headers.authorization = PI_BASIC;
   headers['x-forwarded-for'] = clientIp(req);
   if (CFG.proxyToken) headers['x-piweb-proxy-token'] = CFG.proxyToken;
