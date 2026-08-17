@@ -193,7 +193,7 @@ ${fields}
 ${isBootstrap ? '<div class="warn">⚠️ 首次登录后必须完成身份验证器绑定，否则仅凭此账号密码即可访问，请立即绑定。</div>' : '<div class="hint">登录后 24 小时内免验证</div>'}
 </div>
 <script>
-if (new URLSearchParams(location.search).get('e')) document.getElementById('err').textContent = '用户名或密码错误';
+if (new URLSearchParams(location.search).get('e')) document.getElementById('err').textContent = '${isBootstrap ? '用户名或密码错误' : '密码或验证码错误'}';
 if (new URLSearchParams(location.search).get('b')) document.getElementById('err').textContent = '尝试次数过多，请 60 秒后再试';
 </script>
 </body></html>`;
