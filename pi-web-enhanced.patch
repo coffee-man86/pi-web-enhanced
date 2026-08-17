@@ -1,0 +1,648 @@
+diff --git a/app/api/default-cwd/route.ts b/app/api/default-cwd/route.ts
+index 37ef6d1..d71e80d 100644
+--- a/app/api/default-cwd/route.ts
++++ b/app/api/default-cwd/route.ts
+@@ -8,8 +8,10 @@ import { allowFileRoot } from "@/lib/file-access";
+ // Creates ~/pi-cwd-<YYYYMMDD> if it doesn't exist and returns the path.
+ export async function POST() {
+   try {
+-    const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+-    const dir = join(homedir(), `pi-cwd-${date}`);
++    const configured = process.env.PI_WEB_DEFAULT_CWD?.trim();
++    const dir = configured
++      ? configured
++      : join(homedir(), `pi-cwd-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`);
+     mkdirSync(dir, { recursive: true });
+     allowFileRoot(dir);
+     return NextResponse.json({ cwd: dir });
+diff --git a/app/api/files/[...path]/route.ts b/app/api/files/[...path]/route.ts
+index 4cc3965..08d47f3 100644
+--- a/app/api/files/[...path]/route.ts
++++ b/app/api/files/[...path]/route.ts
+@@ -40,10 +40,10 @@ const IGNORED_SUFFIXES = [".pyc"];
+ const FILE_REQUEST_TYPES = ["list", "read", "download", "meta", "preview", "watch"] as const;
+ type FileRequestType = typeof FILE_REQUEST_TYPES[number];
+ const FILE_REQUEST_TYPE_SET = new Set<string>(FILE_REQUEST_TYPES);
+-const MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024;
+-const MAX_UPLOAD_TOTAL_BYTES = 100 * 1024 * 1024;
++const MAX_UPLOAD_FILE_BYTES = 1024 * 1024 * 1024; // 1GB per file
++const MAX_UPLOAD_TOTAL_BYTES = 2 * 1024 * 1024 * 1024; // 2GB total
+ // Multipart boundaries and headers are not file bytes, but must be bounded too.
+-const MAX_UPLOAD_REQUEST_BYTES = MAX_UPLOAD_TOTAL_BYTES + 1024 * 1024;
++const MAX_UPLOAD_REQUEST_BYTES = MAX_UPLOAD_TOTAL_BYTES + 10 * 1024 * 1024;
+ 
+ const EXT_TO_LANGUAGE: Record<string, string> = {
+   ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
+@@ -151,6 +151,26 @@ export async function POST(
+       return NextResponse.json(inspectUploadTargets(directory, fileNames));
+     }
+ 
++    if (type === "mkdir") {
++      const body = await request.json().catch(() => null) as { name?: unknown } | null;
++      const name = body?.name;
++      if (
++        typeof name !== "string"
++        || !name.trim()
++        || name.includes("/")
++        || name === "."
++        || name === ".."
++      ) {
++        return NextResponse.json({ error: "Invalid folder name" }, { status: 400 });
++      }
++      const newDirectory = path.join(directory, name.trim());
++      if (fs.existsSync(newDirectory)) {
++        return NextResponse.json({ error: "Folder already exists" }, { status: 409 });
++      }
++      fs.mkdirSync(newDirectory);
++      return NextResponse.json({ created: newDirectory });
++    }
++
+     if (type !== "upload") {
+       return NextResponse.json({ error: "Invalid upload request type" }, { status: 400 });
+     }
+@@ -242,6 +262,112 @@ export async function POST(
+   }
+ }
+ 
++/**
++ * Delete a file or directory (recursively). Only allowed inside file roots.
++ */
++export async function DELETE(
++  request: NextRequest,
++  { params }: { params: Promise<{ path: string[] }> }
++) {
++  if (!isApiRequestAllowed(request)) {
++    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
++  }
++  try {
++    const { path: segments } = await params;
++    const target = filePathFromSegments(segments);
++    const allowedRoots = await getAllowedFileRoots();
++    if (!isExistingFilePathAllowed(target, allowedRoots)) {
++      return NextResponse.json({ error: "Access denied" }, { status: 403 });
++    }
++    let stat: fs.Stats;
++    try {
++      stat = fs.statSync(target);
++    } catch {
++      return NextResponse.json({ error: "Not found" }, { status: 404 });
++    }
++    if (!stat.isDirectory() && !stat.isFile()) {
++      return NextResponse.json({ error: "Cannot delete this entry" }, { status: 400 });
++    }
++    fs.rmSync(target, { recursive: true, force: false });
++    return NextResponse.json({ deleted: target });
++  } catch (error) {
++    console.error("[files-op][DELETE]", error);
++    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
++  }
++}
++
++/**
++ * Rename or move a file/directory. Body: { action: "rename"|"move", target: string }
++ * target is either an absolute path inside the allowed roots, or a new name in
++ * the same directory (for "rename").
++ */
++export async function PATCH(
++  request: NextRequest,
++  { params }: { params: Promise<{ path: string[] }> }
++) {
++  if (!isApiRequestAllowed(request)) {
++    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
++  }
++  try {
++    const { path: segments } = await params;
++    const source = filePathFromSegments(segments);
++    const allowedRoots = await getAllowedFileRoots();
++    if (!isExistingFilePathAllowed(source, allowedRoots)) {
++      return NextResponse.json({ error: "Access denied" }, { status: 403 });
++    }
++    const body = await request.json().catch(() => null) as { action?: unknown; target?: unknown } | null;
++    const action = body?.action;
++    const targetRaw = body?.target;
++    if ((action !== "rename" && action !== "move") || typeof targetRaw !== "string") {
++      return NextResponse.json({ error: "action (rename|move) and target are required" }, { status: 400 });
++    }
++    // rename: target 是新文件名（同目录）；move: target 是目标目录，最终路径 = 目录 + 原文件名
++    const target = action === "move"
++      ? path.join(
++          targetRaw.startsWith("/") ? normalizeSlashes(targetRaw) : targetRaw.trim(),
++          path.basename(source),
++        )
++      : path.join(path.dirname(source), targetRaw.trim());
++    if (!isFilePathAllowed(target, allowedRoots)) {
++      return NextResponse.json({ error: "Access denied" }, { status: 403 });
++    }
++    // 不能把目录移动/改名为它自己的子目录（fs 会报 EINVAL，这里提前返回友好错误）
++    if (action === "move" && fs.existsSync(source) && fs.statSync(source).isDirectory()) {
++      const normalizedTarget = normalizeSlashes(target).replace(/\/$/, "");
++      if (normalizedTarget === source || normalizedTarget.startsWith(source + "/")) {
++        return NextResponse.json({ error: "Cannot move a folder into its own subdirectory" }, { status: 400 });
++      }
++    }
++    // 目标父目录的 realpath 校验：防止目标路径中的符号链接把写入重定向到允许根之外
++    // （与上传的防护一致：symlink inside an allowed root cannot redirect outside it）
++    const targetParent = path.dirname(target);
++    let realParent: string;
++    try {
++      realParent = fs.realpathSync(targetParent);
++    } catch {
++      return NextResponse.json({ error: "Target directory does not exist" }, { status: 404 });
++    }
++    const realRoots = new Set<string>();
++    for (const root of allowedRoots) {
++      try { realRoots.add(fs.realpathSync(root)); } catch { /* 忽略失效根 */ }
++    }
++    if (!isFilePathAllowed(realParent, realRoots)) {
++      return NextResponse.json({ error: "Access denied" }, { status: 403 });
++    }
++    if (!fs.existsSync(source)) {
++      return NextResponse.json({ error: "Source not found" }, { status: 404 });
++    }
++    if (fs.existsSync(target)) {
++      return NextResponse.json({ error: "Target already exists" }, { status: 409 });
++    }
++    fs.renameSync(source, target);
++    return NextResponse.json({ moved: { from: source, to: target } });
++  } catch (error) {
++    console.error("[files-op][PATCH]", error);
++    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
++  }
++}
++
+ function createFileBodyStream(filePath: string, range?: { start: number; end: number }): ReadableStream<Uint8Array> {
+   const fileStream = fs.createReadStream(filePath, range);
+   let closed = false;
+diff --git a/components/DirectoryPicker.tsx b/components/DirectoryPicker.tsx
+index f9ee53e..b155c34 100644
+--- a/components/DirectoryPicker.tsx
++++ b/components/DirectoryPicker.tsx
+@@ -3,6 +3,7 @@
+ import { FormEvent, useCallback, useEffect, useState } from "react";
+ import { createPortal } from "react-dom";
+ import { useI18n } from "@/hooks/useI18n";
++import { encodeFilePathForApi } from "@/lib/file-paths";
+ 
+ interface DirectoryEntry {
+   name: string;
+@@ -64,6 +65,7 @@ export function DirectoryPicker({ onCancel, onSelect, busy = false, error }: Pro
+   const [drives, setDrives] = useState<DirectoryEntry[] | null>(null);
+   const [loadError, setLoadError] = useState<string | null>(null);
+   const [loading, setLoading] = useState(true);
++  const [creatingFolder, setCreatingFolder] = useState(false);
+ 
+   const navigateTo = useCallback(async (directory?: string) => {
+     setLoading(true);
+@@ -93,6 +95,30 @@ export function DirectoryPicker({ onCancel, onSelect, busy = false, error }: Pro
+     const candidate = pathInput.trim();
+     if (candidate) void navigateTo(candidate);
+   };
++
++  const handleCreateFolder = useCallback(async () => {
++    if (!currentPath || creatingFolder) return;
++    const name = window.prompt("新建文件夹名称：");
++    if (!name || !name.trim()) return;
++    const trimmed = name.trim();
++    setCreatingFolder(true);
++    setLoadError(null);
++    try {
++      const res = await fetch(`/api/files/${encodeFilePathForApi(currentPath)}?type=mkdir`, {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ name: trimmed }),
++      });
++      const data = await res.json().catch(() => ({})) as { error?: string };
++      if (!res.ok) throw new Error(data.error ?? `操作失败 (HTTP ${res.status})`);
++      // 创建成功后进入新文件夹，可直接点"选择此文件夹"
++      await navigateTo(`${currentPath.replace(/\/$/, "")}/${trimmed}`);
++    } catch (error) {
++      setLoadError(error instanceof Error ? error.message : String(error));
++    } finally {
++      setCreatingFolder(false);
++    }
++  }, [currentPath, creatingFolder, navigateTo]);
+   const hasUncommittedPath = pathInput.trim() !== currentPath;
+   const canSelect = Boolean(currentPath) && !hasUncommittedPath && !busy;
+   const canNavigateUp = Boolean(parentDirectory) || isWindowsDriveRoot(currentPath);
+@@ -209,6 +235,16 @@ export function DirectoryPicker({ onCancel, onSelect, busy = false, error }: Pro
+         </div>
+ 
+         <div className="directory-picker-footer" style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, flexShrink: 0, padding: "10px 18px", borderTop: "1px solid var(--border)" }}>
++          <button
++            className="directory-picker-action"
++            type="button"
++            onClick={() => void handleCreateFolder()}
++            disabled={creatingFolder || !currentPath || busy}
++            title="在当前目录新建文件夹"
++            style={{ marginRight: "auto", padding: "6px 14px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-hover)", color: "var(--accent)", cursor: creatingFolder || !currentPath || busy ? "default" : "pointer", fontSize: 13, opacity: creatingFolder || !currentPath || busy ? 0.6 : 1, whiteSpace: "nowrap" }}
++          >
++            ＋ 新建文件夹
++          </button>
+           <button className="directory-picker-action" type="button" onClick={onCancel} disabled={busy} style={{ padding: "6px 14px", border: "1px solid var(--border)", borderRadius: 6, background: "none", color: "var(--text-muted)", cursor: busy ? "default" : "pointer", fontSize: 13 }}>{t("i18n.cancel")}</button>
+           <button
+             className="directory-picker-action"
+diff --git a/components/FileExplorer.tsx b/components/FileExplorer.tsx
+index 6803f21..fa377e0 100644
+--- a/components/FileExplorer.tsx
++++ b/components/FileExplorer.tsx
+@@ -2,6 +2,7 @@
+ 
+ import { forwardRef, useState, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from "react";
+ import { getFileIcon, FolderIcon } from "./FileIcons";
++import { DirectoryPicker } from "./DirectoryPicker";
+ import {
+   encodeFilePathForApi,
+   getFileDirectory,
+@@ -222,6 +223,9 @@ function TreeNode({
+   gitStatusByPath,
+   changedDirectoryPaths,
+   t,
++  onRename,
++  onMove,
++  onDelete,
+ }: {
+   node: FileNode;
+   depth: number;
+@@ -235,6 +239,9 @@ function TreeNode({
+   gitStatusByPath: Map<string, GitFileStatus>;
+   changedDirectoryPaths: Set<string>;
+   t: Translate;
++  onRename?: (fullPath: string) => void;
++  onMove?: (fullPath: string) => void;
++  onDelete?: (fullPath: string) => void;
+ }) {
+   const open = expandedPaths.has(node.fullPath);
+   const highlighted = highlightedPaths.has(node.fullPath);
+@@ -247,6 +254,7 @@ function TreeNode({
+   const [loaded, setLoaded] = useState(node.loaded ?? false);
+   const [loading, setLoading] = useState(false);
+   const [hovered, setHovered] = useState(false);
++  const [menuOpen, setMenuOpen] = useState(false);
+ 
+   const loadChildren = useCallback(async (force = false) => {
+     if (loaded && !force) return;
+@@ -426,6 +434,87 @@ function TreeNode({
+             </svg>
+           </a>
+         )}
++        {(onRename || onMove || onDelete) && hovered && (
++          <>
++            <button
++              type="button"
++              onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
++              title="文件操作"
++              aria-label="文件操作"
++              style={{
++                position: "absolute",
++                right: node.isDir ? 4 : 28,
++                top: "50%",
++                transform: "translateY(-50%)",
++                display: "flex",
++                alignItems: "center",
++                justifyContent: "center",
++                width: 20,
++                height: 20,
++                background: "var(--bg-panel)",
++                border: "1px solid var(--border)",
++                borderRadius: 4,
++                color: "var(--text-muted)",
++                cursor: "pointer",
++                fontSize: 12,
++                fontWeight: 700,
++                lineHeight: 1,
++              }}
++            >
++              ⋯
++            </button>
++            {menuOpen && (
++              <div
++                onClick={(e) => e.stopPropagation()}
++                style={{
++                  position: "absolute",
++                  right: 4,
++                  top: 24,
++                  zIndex: 40,
++                  minWidth: 108,
++                  background: "var(--bg-panel)",
++                  border: "1px solid var(--border)",
++                  borderRadius: 6,
++                  boxShadow: "0 8px 24px rgba(0,0,0,.35)",
++                  padding: 3,
++                  fontSize: 12,
++                  color: "var(--text)",
++                }}
++              >
++                {onRename && (
++                  <div
++                    onClick={() => { setMenuOpen(false); onRename(node.fullPath); }}
++                    style={{ padding: "5px 9px", borderRadius: 4, cursor: "pointer", whiteSpace: "nowrap" }}
++                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
++                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
++                  >
++                    重命名
++                  </div>
++                )}
++                {onMove && (
++                  <div
++                    onClick={() => { setMenuOpen(false); onMove(node.fullPath); }}
++                    style={{ padding: "5px 9px", borderRadius: 4, cursor: "pointer", whiteSpace: "nowrap" }}
++                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
++                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
++                  >
++                    移动
++                  </div>
++                )}
++                {onDelete && (
++                  <div
++                    onClick={() => { setMenuOpen(false); onDelete(node.fullPath); }}
++                    style={{ padding: "5px 9px", borderRadius: 4, cursor: "pointer", whiteSpace: "nowrap", color: "#f87171" }}
++                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
++                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
++                  >
++                    删除
++                  </div>
++                )}
++              </div>
++            )}
++          </>
++        )}
+       </div>
+       {node.isDir && open && (
+         <div>
+@@ -444,6 +533,9 @@ function TreeNode({
+               gitStatusByPath={gitStatusByPath}
+               changedDirectoryPaths={changedDirectoryPaths}
+               t={t}
++              onRename={onRename}
++              onMove={onMove}
++              onDelete={onDelete}
+             />
+           ))}
+           {children.length === 0 && loaded && (
+@@ -571,6 +663,94 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
+     });
+   }, []);
+ 
++  const refreshTree = useCallback(() => setTreeRefreshKey((key) => key + 1), []);
++
++  const reportOperationError = useCallback((error: unknown) => {
++    const message = error instanceof Error ? error.message : String(error);
++    // 用可读的错误提示（不带 HTTP 前缀的原始信息）
++    window.alert(message.replace(/^Error: /, ""));
++  }, []);
++
++  const handleCreateFolder = useCallback(async () => {
++    const name = window.prompt("新建文件夹名称：");
++    if (!name || !name.trim()) return;
++    try {
++      const res = await fetch(`/api/files/${encodeFilePathForApi(cwd)}?type=mkdir`, {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ name: name.trim() }),
++      });
++      const data = await res.json().catch(() => ({})) as { error?: string };
++      if (!res.ok) throw new Error(data.error ?? `操作失败 (HTTP ${res.status})`);
++      refreshTree();
++    } catch (error) {
++      reportOperationError(error);
++    }
++  }, [cwd, refreshTree, reportOperationError]);
++
++  const handleRename = useCallback(async (fullPath: string) => {
++    const newName = window.prompt(`重命名 \"${getFileName(fullPath)}\" 为：`, getFileName(fullPath));
++    if (!newName || newName === getFileName(fullPath)) return;
++    try {
++      const res = await fetch(`/api/files/${encodeFilePathForApi(fullPath)}`, {
++        method: "PATCH",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ action: "rename", target: newName.trim() }),
++      });
++      const data = await res.json().catch(() => ({})) as { error?: string };
++      if (!res.ok) throw new Error(data.error ?? `操作失败 (HTTP ${res.status})`);
++      refreshTree();
++    } catch (error) {
++      reportOperationError(error);
++    }
++  }, [refreshTree, reportOperationError]);
++
++  const [moveTarget, setMoveTarget] = useState<string | null>(null);
++  const [moveBusy, setMoveBusy] = useState(false);
++  const [moveError, setMoveError] = useState<string | null>(null);
++
++  const handleMove = useCallback((fullPath: string) => {
++    setMoveError(null);
++    setMoveTarget(fullPath);
++  }, []);
++
++  const performMove = useCallback(async (source: string, dest: string) => {
++    // 目标与当前所在目录相同则无需移动
++    if (dest === getFileDirectory(source)) {
++      setMoveTarget(null);
++      return;
++    }
++    setMoveBusy(true);
++    setMoveError(null);
++    try {
++      const res = await fetch(`/api/files/${encodeFilePathForApi(source)}`, {
++        method: "PATCH",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ action: "move", target: dest }),
++      });
++      const data = await res.json().catch(() => ({})) as { error?: string };
++      if (!res.ok) throw new Error(data.error ?? `操作失败 (HTTP ${res.status})`);
++      setMoveTarget(null);
++      refreshTree();
++    } catch (error) {
++      setMoveError(error instanceof Error ? error.message.replace(/^Error: /, "") : String(error));
++    } finally {
++      setMoveBusy(false);
++    }
++  }, [refreshTree]);
++
++  const handleDelete = useCallback(async (fullPath: string) => {
++    if (!window.confirm(`确定删除 \"${getFileName(fullPath)}\"？此操作不可恢复。`)) return;
++    try {
++      const res = await fetch(`/api/files/${encodeFilePathForApi(fullPath)}`, { method: "DELETE" });
++      const data = await res.json().catch(() => ({})) as { error?: string };
++      if (!res.ok) throw new Error(data.error ?? `操作失败 (HTTP ${res.status})`);
++      refreshTree();
++    } catch (error) {
++      reportOperationError(error);
++    }
++  }, [refreshTree, reportOperationError]);
++
+   const applyUploadResult = useCallback((data: UploadResponse) => {
+     const uploaded = data.uploaded ?? [];
+     const skipped = data.skipped ?? [];
+@@ -869,6 +1049,32 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
+         </div>
+       )}
+ 
++      {!loading && !error && (
++        <div style={{ padding: "4px 6px 2px", display: "flex", gap: 4 }}>
++          <button
++            type="button"
++            onClick={() => void handleCreateFolder()}
++            title="新建文件夹"
++            style={{
++              height: 22,
++              padding: "0 8px",
++              display: "flex",
++              alignItems: "center",
++              gap: 4,
++              border: "1px solid var(--border)",
++              borderRadius: 4,
++              background: "var(--bg-panel)",
++              color: "var(--accent)",
++              cursor: "pointer",
++              fontSize: 11,
++              fontWeight: 600,
++              whiteSpace: "nowrap",
++            }}
++          >
++            ＋ 新建文件夹
++          </button>
++        </div>
++      )}
+       {(changesCollapsed || gitFiles.length === 0) && (
+         <div style={{ padding: "2px 4px" }}>
+           {loading ? (
+@@ -891,6 +1097,9 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
+                 gitStatusByPath={gitStatusByPath}
+                 changedDirectoryPaths={changedDirectoryPaths}
+                 t={t}
++                onRename={handleRename}
++                onMove={handleMove}
++                onDelete={handleDelete}
+               />
+             ))
+           )}
+@@ -901,6 +1110,14 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
+           )}
+         </div>
+       )}
++      {moveTarget && (
++        <DirectoryPicker
++          onCancel={() => setMoveTarget(null)}
++          onSelect={(dest) => void performMove(moveTarget, dest)}
++          busy={moveBusy}
++          error={moveError}
++        />
++      )}
+     </div>
+   );
+ });
+diff --git a/lib/allowed-roots.ts b/lib/allowed-roots.ts
+index 5ef2aab..8283dbb 100644
+--- a/lib/allowed-roots.ts
++++ b/lib/allowed-roots.ts
+@@ -20,6 +20,11 @@ export function getAdditionalAllowedRoots(): Set<string> {
+   if (!globalThis.__piAdditionalAllowedRoots) {
+     globalThis.__piAdditionalAllowedRoots = new Set();
+   }
++  // 配置的默认工作目录始终允许访问（不依赖注册时序）
++  const configured = process.env.PI_WEB_DEFAULT_CWD?.trim();
++  if (configured) {
++    globalThis.__piAdditionalAllowedRoots.add(normalizeSlashes(configured));
++  }
+   return globalThis.__piAdditionalAllowedRoots;
+ }
+ 
+diff --git a/lib/directory-browser.ts b/lib/directory-browser.ts
+index 92ef89b..ad72c0d 100644
+--- a/lib/directory-browser.ts
++++ b/lib/directory-browser.ts
+@@ -15,7 +15,7 @@ export function shouldShowWindowsDrivePicker(
+ }
+ 
+ export function getBrowseStartDirectory(directory?: string): string {
+-  return directory || homedir();
++  return directory || process.env.PI_WEB_DEFAULT_CWD || homedir();
+ }
+ 
+ export function getWindowsDriveCandidates(): BrowsableDirectory[] {
+diff --git a/lib/web-auth.ts b/lib/web-auth.ts
+index b38a80d..4a655fd 100644
+--- a/lib/web-auth.ts
++++ b/lib/web-auth.ts
+@@ -1,6 +1,6 @@
+ import { createHash, timingSafeEqual } from "node:crypto";
+ 
+-export const PI_WEB_AUTH_USERNAME = "pi";
++export const PI_WEB_AUTH_USERNAME = process.env.PI_WEB_USERNAME || "pi";
+ 
+ function hashSecret(value: string): Buffer {
+   return createHash("sha256").update(value, "utf8").digest();
+diff --git a/next.config.ts b/next.config.ts
+index 24322cb..ff89935 100644
+--- a/next.config.ts
++++ b/next.config.ts
+@@ -13,6 +13,10 @@ try {
+ 
+ const nextConfig: NextConfig = {
+   outputFileTracingRoot: configDir,
++  experimental: {
++    // 允许大文件上传（默认 10MB 的 body 缓冲会导致 multipart 解析失败）
++    proxyClientMaxBodySize: 5 * 1024 * 1024 * 1024,
++  },
+   serverExternalPackages: [
+     "undici",
+     "@earendil-works/pi-coding-agent",
+diff --git a/proxy.ts b/proxy.ts
+index 31bacfa..bf6ebf5 100644
+--- a/proxy.ts
++++ b/proxy.ts
+@@ -23,17 +23,42 @@ export function proxy(request: NextRequest) {
+   }
+ 
+   const password = process.env.PI_WEB_PASSWORD;
+-  if (
+-    isWebPasswordEnabled(password)
+-    && !isValidBasicAuthorization(request.headers.get("authorization"), password)
+-  ) {
+-    return new NextResponse("Authentication required", {
+-      status: 401,
+-      headers: {
+-        "Cache-Control": "no-store",
+-        "WWW-Authenticate": 'Basic realm="Pi Web", charset="UTF-8"',
+-      },
+-    });
++  if (isWebPasswordEnabled(password)) {
++    const authorization = request.headers.get("authorization");
++    const authorized = isValidBasicAuthorization(authorization, password);
++    // 登录日志（供白名单）：记录结果、用户名、客户端 IP
++    if (authorization) {
++      // 仅在请求携带与 PI_WEB_TRUST_PROXY_TOKEN 匹配的密钥头时才信任
++      // X-Forwarded-For（由可信反代 2FA 代理写入）。否则直接访问时客户端可
++      // 伪造该头污染白名单日志，一律记 unknown。
++      const trustToken = process.env.PI_WEB_TRUST_PROXY_TOKEN;
++      const presented = request.headers.get("x-piweb-proxy-token");
++      const trustProxy = Boolean(trustToken && presented && presented === trustToken);
++      const ip = trustProxy
++        ? (request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
++          || request.headers.get("x-real-ip")
++          || "unknown")
++        : "unknown";
++      let username = "-";
++      const match = /^Basic\s+(\S+)$/i.exec(authorization);
++      if (match) {
++        try {
++          username = Buffer.from(match[1], "base64").toString("utf-8").split(":")[0];
++        } catch {
++          // ignore malformed credentials
++        }
++      }
++      console.log(`[piweb-auth] ${authorized ? "OK" : "FAIL"} user=${username} ip=${ip}`);
++    }
++    if (!authorized) {
++      return new NextResponse("Authentication required", {
++        status: 401,
++        headers: {
++          "Cache-Control": "no-store",
++          "WWW-Authenticate": 'Basic realm="Pi Web"',
++        },
++      });
++    }
+   }
+ 
+   return NextResponse.next();
