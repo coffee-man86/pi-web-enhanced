@@ -33,7 +33,13 @@ pi-web 的 Basic Auth 只有密码，公网暴露时无法防暴力破解、也�
 # 需要 Node.js >= 18（无任何第三方依赖）
 sudo bash setup.sh 42204 25133
 ```
-脚本会生成随机 TOTP 密钥 / cookie 密钥 / 代理令牌，写入 `/etc/piweb2fa/config.json`。
+脚本会生成**随机** TOTP 密钥 / cookie 密钥 / 代理令牌（每次安装独立，不共享），写入 `/etc/piweb2fa/config.json`。
+
+### 首次登录引导（全新安装自动启用）
+1. 打开 `http://你的地址:42204` → 登录页输入 **用户名 `pi` / 密码 `password`**（首次登录模式）
+2. 登录后**强制跳转绑定页**：显示本安装专属的二维码 + 密钥，手机身份验证器扫码绑定
+3. 看到 6 位动态码后点「**我已经绑定**」→ 之后登录切换为「密码 + 动态码」（无需用户名）
+4. 建议随后编辑 `/etc/piweb2fa/config.json` 修改 `password` 与 `firstLoginPassword`
 
 ### 配置
 编辑 `/etc/piweb2fa/config.json`：
